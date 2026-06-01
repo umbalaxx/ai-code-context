@@ -1,14 +1,23 @@
 import ast
 import os
 import subprocess
+import sys
 from datetime import datetime
+from pathlib import Path
 
 import pathspec
+
+try:
+    import tomllib  # Python 3.11+
+except ImportError:
+    try:
+        import tomli as tomllib  # pip install tomli
+    except ImportError:
+        tomllib = None
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
 OUTPUT_FILE = "code_context.md"
-SCRIPT_NAME = os.path.basename(__file__)
 
 IGNORED_DIRS = {
     ".git",
@@ -20,10 +29,10 @@ IGNORED_DIRS = {
     "build",
     "secret",
     "secrets",
+    ".code-context",
 }
 IGNORED_FILES = {
     OUTPUT_FILE,
-    SCRIPT_NAME,
     ".env",
     "uv.lock",
     ".python-version",
@@ -48,14 +57,74 @@ IGNORED_SUFFIXES = {
 }
 
 # Edit these directly when you want to be selective
-INCLUDE_ONLY = [
-    ("src/pdf_summarizer/data_types.py", {"strip_comments": True}),
-    ("src/pdf_summarizer/main.py", {"strip_comments": False}),
-]  # if non-empty, only bundle these paths e.g. ["src/auth", "src/models/user.py"]
-EXTRA_EXCLUDE = [
-    "mongodb-backups",
-    "markdowns",
-]  # additional paths to skip e.g. ["src/legacy", "tests"]
+INCLUDE_ONLY = (
+    []
+)  # e.g. [("src/auth", {}), ("src/models/user.py", {"strip_comments": True})]
+
+INCLUDE_README = True
+
+
+DEFAULT_CONFIG = """\
+# code-context configuration
+output = "code_context.md"
+include_readme = true
+
+# Add files/dirs to include. Use strip_comments = true to strip Python comments.
+# [[include]] # Include the whole src directory
+# path = "src/your-project"
+# strip_comments = false
+
+# [[include]] # You can include specific files
+# path = "src/utils/util.py"
+# strip_comments = false
+"""
+
+
+# ── Config loader ─────────────────────────────────────────────────────────────
+
+
+def load_config() -> tuple[list, str]:
+    """
+    Returns (include_only, output_file).
+    include_only is a list of (path_str, opts_dict) tuples.
+    Falls back to module-level defaults if no config found.
+    """
+    config_path = Path(".code-context/config.toml")
+
+    if not config_path.exists():
+        # Prompt user to run code-context init first
+        print(
+            "⚠ No .code-context/config.toml found. Run 'code-context init' first to use custom config."
+        )
+        return INCLUDE_ONLY, OUTPUT_FILE
+
+    if tomllib is None:
+        print("⚠ Found .code-context/config.toml but no TOML parser available.")
+        print("  Install one: pip install tomli  (or use Python 3.11+)")
+        return INCLUDE_ONLY, OUTPUT_FILE
+
+    print(f"✓ Using config: {config_path}")
+
+    with open(config_path, "rb") as f:
+        raw = tomllib.load(f)
+
+    output_file = raw.get("output", OUTPUT_FILE)
+    include_readme = raw.get("include_readme", INCLUDE_README)
+
+    # Parse [[include]] array of tables
+    # Each entry: { path = "...", strip_comments = false }
+    include_only = []
+    if include_readme:
+        include_only.append(("README.md", {}))
+    for entry in raw.get("include", []):
+        path = entry.get("path")
+        if not path:
+            continue
+        opts = {k: v for k, v in entry.items() if k != "path"}
+        include_only.append((path, opts))
+
+    return include_only, output_file
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -101,6 +170,30 @@ def get_git_changed_files():
         return set(result.stdout.strip().splitlines())
     except Exception:
         return set()
+
+
+def match_include(rel_path: str, include_only: list) -> dict | None:
+    """
+    Returns the opts dict for the first include entry that matches rel_path,
+    or None if no match.
+
+    Matching rules:
+      - Exact file match:   "src/foo/bar.py" matches only that file
+      - Directory prefix:   "src/foo"        matches src/foo/bar.py, src/foo/baz/qux.py
+      - Trailing slash:     "src/foo/"       same as directory prefix
+    """
+    for inc_path, opts in include_only:
+        # Normalise: strip trailing slash
+        inc = inc_path.rstrip("/")
+
+        if rel_path == inc:
+            return opts  # exact file match
+
+        # Directory match: rel_path must start with inc + separator
+        if rel_path.startswith(inc + "/") or rel_path.startswith(inc + os.sep):
+            return opts
+
+    return None
 
 
 def extract_python_symbols(path):
@@ -154,7 +247,7 @@ def extract_imports(path):
 
 
 def strip_python_comments(source: str) -> str:
-    """Remove # comments and docstrings from Python source."""
+    """Remove # comments from Python source."""
 
     lines = source.splitlines()
 
@@ -193,7 +286,7 @@ def strip_python_comments(source: str) -> str:
     return "\n".join(result)
 
 
-def collect_files(spec):
+def collect_files(spec, include_only):
     collected = []
     for root, dirs, files in os.walk("."):
         dirs[:] = [
@@ -211,13 +304,8 @@ def collect_files(spec):
                 continue
             if spec.match_file(rel_path):
                 continue
-            if any(rel_path.startswith(ex) for ex in EXTRA_EXCLUDE):
+            if include_only and match_include(rel_path, include_only) is None:
                 continue
-            if INCLUDE_ONLY and not any(
-                rel_path.startswith(inc) for inc, _ in INCLUDE_ONLY
-            ):
-                continue
-
             if is_binary(abs_path):
                 continue
 
@@ -225,19 +313,34 @@ def collect_files(spec):
     return sorted(collected)
 
 
+def init():
+    config_dir = Path(".code-context")
+    config_path = config_dir / "config.toml"
+
+    if config_path.exists():
+        print("⚠ .code-context/config.toml already exists. Aborting.")
+        return
+
+    config_dir.mkdir(exist_ok=True)
+    config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+    print(f"✓ Created {config_path}")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
 def bundle():
+    include_only, output_file = load_config()
+
     spec = load_gitignore()
-    files = collect_files(spec)
+    files = collect_files(spec, include_only)
     git_status = get_git_status()
     git_changed = get_git_changed_files()
 
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as out:
+    with open(output_file, "w", encoding="utf-8") as out:
 
         # Header
-        out.write(f"# Code Context\n")
+        out.write("# Code Context\n")
         out.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n")
 
         # Directory tree
@@ -283,15 +386,11 @@ def bundle():
             out.write("\n")
 
         # Source files
-        if INCLUDE_ONLY:
+        if include_only:
             out.write("## Source Files\n\n")
-
             for rel_path in files:
-                matched_opts = next(
-                    (opts for inc, opts in INCLUDE_ONLY if rel_path.startswith(inc)),
-                    None,
-                )
-                if matched_opts is None:
+                opts = match_include(rel_path, include_only)
+                if opts is None:
                     continue
 
                 changed = " ⚡ (modified)" if rel_path in git_changed else ""
@@ -300,19 +399,46 @@ def bundle():
                 try:
                     with open(rel_path, "r", encoding="utf-8") as f:
                         source = f.read()
-                    if matched_opts.get("strip_comments") and ext == "py":
+                    if opts.get("strip_comments") and ext == "py":
                         source = strip_python_comments(source)
                     out.write(source)
                 except Exception as e:
                     out.write(f"// Error reading: {e}\n")
                 out.write("\n```\n\n")
 
-    print(f"✓ {OUTPUT_FILE} — {len(files)} files bundled")
-    if INCLUDE_ONLY:
-        print(f"  Selective: {INCLUDE_ONLY}")
+        # Footer / symtem prompt
+        out.write("# System Prompt\n")
+        out.write(
+            "You are a code writer/analyst/review assistant who is proficient in Python and front-end development stack, e.g., HTML, Javascript, React. Your task is to analyze the provided code and respond to the user's instructions/questions/goals.\n\n"
+        )
+
+        out.write("# Rules:\n")
+        out.write("- Be precise and concise, hit to the point.\n")
+        out.write(
+            "- If no instructions/goals are provided, do not over-analyze, make assumptions or suggest anything\n"
+        )
+        out.write(
+            "- For Python, assume `uv` is the package manager and interpreter if not specified otherwise. Do not use `pip` with requirements.txt\n"
+        )
+        out.write(
+            "- You can briefly (very concise) explain the code and point out some fixes (if any)\n\n"
+        )
+
+        out.write("# Intructions/questions/goals:\n")
+
+    print(f"✓ {output_file} — {len(files)} files bundled")
+    if include_only:
+        print(f"  Selective: {[p for p, _ in include_only]}")
     if git_changed:
         print(f"  ⚡ {len(git_changed)} files changed since last commit")
 
 
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "init":
+        init()
+    else:
+        bundle()
+
+
 if __name__ == "__main__":
-    bundle()
+    main()

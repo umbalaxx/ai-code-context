@@ -1,0 +1,10 @@
+output = "code_context.md"
+include_readme = true
+
+[[include]] # Include the whole src directory
+path = "src"
+strip_comments = false
+
+[[include]] # You can include specific files
+path = "src/ai_code_context/cx_script.py"
+strip_comments = false
