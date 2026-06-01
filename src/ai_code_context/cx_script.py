@@ -5,8 +5,6 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-import pathspec
-
 try:
     import tomllib  # Python 3.11+
 except ImportError:
@@ -27,39 +25,13 @@ IGNORED_DIRS = {
     "env",
     "dist",
     "build",
-    "secret",
-    "secrets",
     ".code-context",
 }
-IGNORED_FILES = {
-    OUTPUT_FILE,
-    ".env",
-    "uv.lock",
-    ".python-version",
-    ".gitignore",
-}
-IGNORED_SUFFIXES = {
-    ".txt",
-    ".log",
-    ".json",
-    ".csv",
-    ".ipynb",
-    ".xml",
-    ".yaml",
-    ".yml",
-    ".pdf",
-    ".sh",
-    ".toml",
-    ".html",
-    ".zip",
-    ".archive",
-    ".bib",
-}
+
 
 # Edit these directly when you want to be selective
-INCLUDE_ONLY = (
-    []
-)  # e.g. [("src/auth", {}), ("src/models/user.py", {"strip_comments": True})]
+# e.g. [("src/auth", {}), ("src/models/user.py", {"strip_comments": True})]
+INCLUDE_ONLY = []
 
 INCLUDE_README = True
 
@@ -70,12 +42,12 @@ output = "code_context.md"
 include_readme = true
 
 # Add files/dirs to include. Use strip_comments = true to strip Python comments.
-# [[include]] # Include the whole src directory
-# path = "src/your-project"
-# strip_comments = false
+# [[include]] # Include the scripts in the whole `src` directory
+path = "src"
+strip_comments = false
 
 # [[include]] # You can include specific files
-# path = "src/utils/util.py"
+# path = "utils/util.py"
 # strip_comments = false
 """
 
@@ -127,13 +99,6 @@ def load_config() -> tuple[list, str]:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-def load_gitignore():
-    if os.path.exists(".gitignore"):
-        with open(".gitignore", "r", encoding="utf-8") as f:
-            return pathspec.PathSpec.from_lines("gitwildmatch", f.readlines())
-    return pathspec.PathSpec.from_lines("gitwildmatch", [])
 
 
 def is_binary(path):
@@ -286,24 +251,24 @@ def strip_python_comments(source: str) -> str:
     return "\n".join(result)
 
 
-def collect_files(spec, include_only):
+def collect_files(include_only):
+    """
+    Collect all files that should be included in the code context.
+
+    Args:
+        include_only: List of (path_str, opts_dict) tuples from config
+
+    Returns:
+        List of relative file paths to include
+    """
+
     collected = []
-    for root, dirs, files in os.walk("."):
-        dirs[:] = [
-            d
-            for d in dirs
-            if d not in IGNORED_DIRS and not spec.match_file(os.path.join(root, d))
-        ]
+    for root, _, files in os.walk("."):
+
         for file in files:
             abs_path = os.path.join(root, file)
             rel_path = os.path.relpath(abs_path, ".")
 
-            if file in IGNORED_FILES:
-                continue
-            if any(file.endswith(suffix) for suffix in IGNORED_SUFFIXES):
-                continue
-            if spec.match_file(rel_path):
-                continue
             if include_only and match_include(rel_path, include_only) is None:
                 continue
             if is_binary(abs_path):
@@ -331,9 +296,7 @@ def init():
 
 def bundle():
     include_only, output_file = load_config()
-
-    spec = load_gitignore()
-    files = collect_files(spec, include_only)
+    files = collect_files(include_only)
     git_status = get_git_status()
     git_changed = get_git_changed_files()
 
@@ -346,20 +309,16 @@ def bundle():
         # Directory tree
         out.write("## Project Structure\n```\n")
         for root, dirs, fs in os.walk("."):
-            dirs[:] = [
-                d
-                for d in dirs
-                if d not in IGNORED_DIRS and not spec.match_file(os.path.join(root, d))
-            ]
+            dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
             level = root.replace(".", "").count(os.sep)
             indent = "    " * level
             if root != ".":
                 out.write(f"{indent}{os.path.basename(root)}/\n")
+
             for f in sorted(fs):
                 rel = os.path.relpath(os.path.join(root, f), ".")
-                if f not in IGNORED_FILES and not spec.match_file(rel):
-                    marker = f" [{git_status[rel]}]" if rel in git_status else ""
-                    out.write(f"{indent}    {f}{marker}\n")
+                marker = f" [{git_status[rel]}]" if rel in git_status else ""
+                out.write(f"{indent}    {f}{marker}\n")
         out.write("```\n\n")
 
         # Symbol index — only for included files

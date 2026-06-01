@@ -6,5 +6,5 @@ path = "src"
 strip_comments = false
 
 [[include]] # You can include specific files
-path = "src/ai_code_context/cx_script.py"
+path = "pyproject.toml"
 strip_comments = false
