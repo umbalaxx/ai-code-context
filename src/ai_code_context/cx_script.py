@@ -39,10 +39,10 @@ INCLUDE_README = True
 DEFAULT_CONFIG = """\
 # code-context configuration
 output = "code_context.md"
-include_readme = true
+include_readme = false
 
 # Add files/dirs to include. Use strip_comments = true to strip Python comments.
-# [[include]] # Include the scripts in the whole `src` directory
+[[include]] # Include the scripts in the whole `src` directory
 path = "src"
 strip_comments = false
 
@@ -376,6 +376,7 @@ def bundle():
         if include_only:
             out.write("## Source Files\n\n")
             for rel_path in files:
+                print(rel_path)
                 opts = match_include(rel_path, include_only)
                 if opts is None:
                     continue
