@@ -1,5 +1,5 @@
 output = "code_context.md"
-include_readme = false
+include_readme = true
 
 # tree_depth = 3  # limit folder tree depth (comment out for unlimited)
 
@@ -16,8 +16,7 @@ strip_comments = false
 [[include]] # Include the whole src directory
 path = "src/ai_code_context/cx_script.py"
 mode = "symbols"
-# symbols = ["extract_python_symbols", "bundle"]
-line_numbers = [168, 185]
+symbols = ["add_claude_md", "bundle"]
 strip_comments = false
 
 [[include]] # You can include specific files

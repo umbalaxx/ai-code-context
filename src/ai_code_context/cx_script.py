@@ -33,6 +33,22 @@ INCLUDE_ONLY = []
 
 INCLUDE_README = True
 
+AI_INSTRUCTION_FILES = ["CLAUDE.md", "AGENTS.md"]
+
+CONTEXT_SENTINEL = ".code-context/code_context.md"
+
+CONTEXT_INSTRUCTION = (
+    "\n## Project Context (ai-code-context)\n\n"
+    "Before starting any task, read `.code-context/code_context.md` for the full project context.\n"
+    "Do not crawl individual source files unless asked.\n\n"
+    "If the context file is missing, run `code-context` to generate it.\n\n"
+    "### Refresh Context\n"
+    "If you've made changes and need updated context, run:\n"
+    "```bash\n"
+    "code-context\n"
+    "```\n"
+)
+
 
 DEFAULT_CONFIG = """\
 # code-context configuration
@@ -309,6 +325,19 @@ def collect_files(include_only):
     return sorted(collected)
 
 
+def code_fence(source: str) -> str:
+    """Return the shortest backtick fence that won't collide with content."""
+    max_run = 0
+    run = 0
+    for ch in source:
+        if ch == "`":
+            run += 1
+            max_run = max(max_run, run)
+        else:
+            run = 0
+    return "`" * max(3, max_run + 1)
+
+
 def add_to_gitignore():
     """Add code-context to gitignore"""
 
@@ -327,29 +356,20 @@ def add_to_gitignore():
         print("✓ Created .gitignore with .code-context/")
 
 
-def add_claude_md():
-    """Add CLAUDE.md to the project"""
-
-    claude_md_path = Path("CLAUDE.md")
-    content = """# Project Context
-
-Before starting any task, read `.code-context/code_context.md` for the full project context.
-Do not crawl individual source files unless asked.
-
-If the context file is missing, run `code-context` to generate it.
-
-## Refresh Context
-If you've made changes and need updated context, run:
-```bash
-code-context
-```
-"""
-
-    if claude_md_path.exists():
-        print("✓ CLAUDE.md already exists")
-    else:
-        claude_md_path.write_text(content, encoding="utf-8")
-        print("✓ Created CLAUDE.md")
+def add_ai_instructions():
+    """Inject code-context instructions into AI context files (CLAUDE.md, AGENTS.md, etc.)"""
+    for filename in AI_INSTRUCTION_FILES:
+        path = Path(filename)
+        if path.exists():
+            content = path.read_text(encoding="utf-8")
+            if CONTEXT_SENTINEL in content:
+                print(f"✓ {filename} already has code-context instructions")
+            else:
+                path.write_text(content + CONTEXT_INSTRUCTION, encoding="utf-8")
+                print(f"✓ Added code-context instructions to {filename}")
+        else:
+            path.write_text(CONTEXT_INSTRUCTION.lstrip(), encoding="utf-8")
+            print(f"✓ Created {filename}")
 
 
 def init():
@@ -364,7 +384,7 @@ def init():
     config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
 
     add_to_gitignore()
-    add_claude_md()
+    add_ai_instructions()
     print(f"✓ Created {config_path}")
 
 
@@ -449,7 +469,6 @@ def bundle():
                 ):
                     continue
 
-                print(rel_path)
                 changed = " ⚡ (modified)" if rel_path in git_changed else ""
                 ext = rel_path.rsplit(".", 1)[-1] if "." in rel_path else ""
 
@@ -459,7 +478,6 @@ def bundle():
                 elif line_numbers is not None:
                     annotation = f" (lines {line_numbers[0]}–{line_numbers[1]})"
 
-                out.write(f"### `{rel_path}`{changed}{annotation}\n```{ext}\n")
                 try:
                     if symbols_filter is not None and ext == "py":
                         source = extract_symbol_source(rel_path, symbols_filter)
@@ -470,13 +488,15 @@ def bundle():
                     else:
                         with open(rel_path, "r", encoding="utf-8") as f:
                             source = f.read()
-
                     if opts.get("strip_comments") and ext == "py":
                         source = strip_python_comments(source)
-                    out.write(source)
                 except Exception as e:
-                    out.write(f"// Error reading: {e}\n")
-                out.write("\n```\n\n")
+                    source = f"// Error reading: {e}"
+
+                fence = code_fence(source)
+                out.write(f"### `{rel_path}`{changed}{annotation}\n{fence}{ext}\n")
+                out.write(source)
+                out.write(f"\n{fence}\n\n")
 
         # Footer / system prompt
         out.write("# System Prompt\n")
