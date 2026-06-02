@@ -29,8 +29,6 @@ IGNORED_DIRS = {
 }
 
 
-# Edit these directly when you want to be selective
-# e.g. [("src/auth", {}), ("src/models/user.py", {"strip_comments": True})]
 INCLUDE_ONLY = []
 
 INCLUDE_README = True
@@ -40,40 +38,45 @@ DEFAULT_CONFIG = """\
 # code-context configuration
 output = "code_context.md"
 include_readme = false
+# tree_depth = 3  # limit folder tree depth (comment out for unlimited)
 
-# Add files/dirs to include. Use strip_comments = true to strip Python comments.
-[[include]] # Include the scripts in the whole `src` directory
+# Add files/dirs to include.
+# mode: "full" (default) | "symbols" (symbol index only, no source block)
+# symbols: list of symbol names — show only those symbols' source
+# line_numbers: [start, end] — show only that line range (1-indexed, inclusive)
+# strip_comments: strip Python # comments from source
+
+[[include]] # Show only symbol index for the whole src directory
 path = "src"
-strip_comments = false
+mode = "symbols"
 
-# [[include]] # You can include specific files
-# path = "utils/util.py"
-# strip_comments = false
+# [[include]] # Override: show specific symbols from one file
+# path = "src/mymodule/util.py"
+# symbols = ["MyClass", "parse_config"]
+
+# [[include]] # Override: show a specific line range
+# path = "src/mymodule/handler.py"
+# line_numbers = [45, 120]
 """
 
 
 # ── Config loader ─────────────────────────────────────────────────────────────
 
 
-def load_config() -> tuple[list, str]:
-    """
-    Returns (include_only, output_file).
-    include_only is a list of (path_str, opts_dict) tuples.
-    Falls back to module-level defaults if no config found.
-    """
+def load_config() -> tuple[list, str, int | None]:
+    """Returns (include_only, output_file, tree_depth)."""
     config_path = Path(".code-context/config.toml")
 
     if not config_path.exists():
-        # Prompt user to run code-context init first
         print(
             "⚠ No .code-context/config.toml found. Run 'code-context init' first to use custom config."
         )
-        return INCLUDE_ONLY, OUTPUT_FILE
+        return INCLUDE_ONLY, OUTPUT_FILE, None
 
     if tomllib is None:
         print("⚠ Found .code-context/config.toml but no TOML parser available.")
         print("  Install one: pip install tomli  (or use Python 3.11+)")
-        return INCLUDE_ONLY, OUTPUT_FILE
+        return INCLUDE_ONLY, OUTPUT_FILE, None
 
     print(f"✓ Using config: {config_path}")
 
@@ -82,9 +85,8 @@ def load_config() -> tuple[list, str]:
 
     output_file = raw.get("output", OUTPUT_FILE)
     include_readme = raw.get("include_readme", INCLUDE_README)
+    tree_depth = raw.get("tree_depth", None)
 
-    # Parse [[include]] array of tables
-    # Each entry: { path = "...", strip_comments = false }
     include_only = []
     if include_readme:
         include_only.append(("README.md", {}))
@@ -95,7 +97,7 @@ def load_config() -> tuple[list, str]:
         opts = {k: v for k, v in entry.items() if k != "path"}
         include_only.append((path, opts))
 
-    return include_only, output_file
+    return include_only, output_file, tree_depth
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -139,56 +141,94 @@ def get_git_changed_files():
 
 def match_include(rel_path: str, include_only: list) -> dict | None:
     """
-    Returns the opts dict for the first include entry that matches rel_path,
-    or None if no match.
+    Returns the opts dict for the most specific (longest prefix) include entry
+    that matches rel_path, or None if no match.
 
     Matching rules:
       - Exact file match:   "src/foo/bar.py" matches only that file
       - Directory prefix:   "src/foo"        matches src/foo/bar.py, src/foo/baz/qux.py
       - Trailing slash:     "src/foo/"       same as directory prefix
+    More specific (longer) paths take priority over shorter ones.
     """
+    best_opts = None
+    best_len = -1
     for inc_path, opts in include_only:
-        # Normalise: strip trailing slash
         inc = inc_path.rstrip("/")
+        matched = (
+            rel_path == inc
+            or rel_path.startswith(inc + "/")
+            or rel_path.startswith(inc + os.sep)
+        )
+        if matched and len(inc) > best_len:
+            best_len = len(inc)
+            best_opts = opts
+    return best_opts
 
-        if rel_path == inc:
-            return opts  # exact file match
 
-        # Directory match: rel_path must start with inc + separator
-        if rel_path.startswith(inc + "/") or rel_path.startswith(inc + os.sep):
-            return opts
-
-    return None
-
-
-def extract_python_symbols(path):
+def extract_python_symbols(path, filter_names=None):
     """Extract top-level classes, functions, and their docstrings."""
     try:
         with open(path, "r", encoding="utf-8") as f:
             source = f.read()
         tree = ast.parse(source)
+        name_set = set(filter_names) if filter_names else None
         symbols = []
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                if node.col_offset == 0:  # top-level only
-                    doc = ast.get_docstring(node) or ""
-                    symbols.append(
-                        f"  def {node.name}() [line {node.lineno}]"
-                        + (f" — {doc.splitlines()[0]}" if doc else "")
-                    )
+                if node.col_offset == 0:
+                    if name_set is None or node.name in name_set:
+                        doc = ast.get_docstring(node) or ""
+                        symbols.append(
+                            f"  def {node.name}() [line {node.lineno}]"
+                            + (f" — {doc.splitlines()[0]}" if doc else "")
+                        )
             elif isinstance(node, ast.ClassDef):
                 if node.col_offset == 0:
-                    doc = ast.get_docstring(node) or ""
-                    symbols.append(
-                        f"  class {node.name} [line {node.lineno}]"
-                        + (f" — {doc.splitlines()[0]}" if doc else "")
-                    )
-                    for item in node.body:
-                        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                            symbols.append(f"    .{item.name}() [line {item.lineno}]")
+                    if name_set is None or node.name in name_set:
+                        doc = ast.get_docstring(node) or ""
+                        symbols.append(
+                            f"  class {node.name} [line {node.lineno}]"
+                            + (f" — {doc.splitlines()[0]}" if doc else "")
+                        )
+                        for item in node.body:
+                            if isinstance(
+                                item, (ast.FunctionDef, ast.AsyncFunctionDef)
+                            ):
+                                symbols.append(
+                                    f"    .{item.name}() [line {item.lineno}]"
+                                )
         return symbols
     except SyntaxError:
         return ["  (could not parse)"]
+
+
+def extract_symbol_source(path: str, names: list) -> str:
+    """Extract source of named top-level symbols from a Python file."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        source = "".join(lines)
+        tree = ast.parse(source)
+        name_set = set(names)
+        chunks = []
+        for node in ast.iter_child_nodes(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if node.name in name_set:
+                    chunk = "".join(lines[node.lineno - 1 : node.end_lineno])
+                    chunks.append(chunk.rstrip())
+        return "\n\n".join(chunks)
+    except Exception as e:
+        return f"# Error extracting symbols: {e}"
+
+
+def extract_line_range(path: str, start: int, end: int) -> str:
+    """Extract lines start..end (1-indexed, inclusive) from a file."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        return "".join(lines[start - 1 : end]).rstrip()
+    except Exception as e:
+        return f"# Error reading lines: {e}"
 
 
 def extract_imports(path):
@@ -216,13 +256,10 @@ def strip_python_comments(source: str) -> str:
 
     lines = source.splitlines()
 
-    # Remove inline and full-line # comments
     cleaned = []
     for line in lines:
         stripped = line.rstrip()
-        # Remove inline comment, preserving indentation
         if "#" in stripped:
-            # crude but effective: find first # not inside a string
             in_str = False
             quote_char = None
             for i, ch in enumerate(stripped):
@@ -236,7 +273,6 @@ def strip_python_comments(source: str) -> str:
                     break
         cleaned.append(stripped)
 
-    # Collapse 3+ consecutive blank lines to 2
     result = []
     blank_count = 0
     for line in cleaned:
@@ -252,15 +288,7 @@ def strip_python_comments(source: str) -> str:
 
 
 def collect_files(include_only):
-    """
-    Collect all files that should be included in the code context.
-
-    Args:
-        include_only: List of (path_str, opts_dict) tuples from config
-
-    Returns:
-        List of relative file paths to include
-    """
+    """Collect all files that should be included in the code context."""
 
     if len(include_only) == 0:
         return []
@@ -299,6 +327,31 @@ def add_to_gitignore():
         print("✓ Created .gitignore with .code-context/")
 
 
+def add_claude_md():
+    """Add CLAUDE.md to the project"""
+
+    claude_md_path = Path("CLAUDE.md")
+    content = """# Project Context
+
+Before starting any task, read `.code-context/code_context.md` for the full project context.
+Do not crawl individual source files unless asked.
+
+If the context file is missing, run `code-context` to generate it.
+
+## Refresh Context
+If you've made changes and need updated context, run:
+```bash
+code-context
+```
+"""
+
+    if claude_md_path.exists():
+        print("✓ CLAUDE.md already exists")
+    else:
+        claude_md_path.write_text(content, encoding="utf-8")
+        print("✓ Created CLAUDE.md")
+
+
 def init():
     config_dir = Path(".code-context")
     config_path = config_dir / "config.toml"
@@ -311,6 +364,7 @@ def init():
     config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
 
     add_to_gitignore()
+    add_claude_md()
     print(f"✓ Created {config_path}")
 
 
@@ -318,7 +372,7 @@ def init():
 
 
 def bundle():
-    include_only, output_file = load_config()
+    include_only, output_file, tree_depth = load_config()
     files = collect_files(include_only)
     git_status = get_git_status()
     git_changed = get_git_changed_files()
@@ -337,12 +391,13 @@ def bundle():
         # Directory tree
         out.write("## Project Structure\n```\n")
         for root, dirs, fs in os.walk("."):
-            dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
+            dirs[:] = sorted([d for d in dirs if d not in IGNORED_DIRS])
             level = root.replace(".", "").count(os.sep)
+            if tree_depth is not None and level >= tree_depth:
+                dirs[:] = []  # stop recursing past max depth
             indent = "    " * level
             if root != ".":
                 out.write(f"{indent}{os.path.basename(root)}/\n")
-
             for f in sorted(fs):
                 rel = os.path.relpath(os.path.join(root, f), ".")
                 marker = f" [{git_status[rel]}]" if rel in git_status else ""
@@ -354,7 +409,9 @@ def bundle():
         if py_files:
             out.write("## Symbol Index\n")
             for path in py_files:
-                symbols = extract_python_symbols(path)
+                opts = match_include(path, include_only) or {}
+                filter_names = opts.get("symbols")
+                symbols = extract_python_symbols(path, filter_names)
                 if symbols:
                     marker = " ⚡" if path in git_changed else ""
                     out.write(f"\n**{path}**{marker}\n")
@@ -376,17 +433,44 @@ def bundle():
         if include_only:
             out.write("## Source Files\n\n")
             for rel_path in files:
-                print(rel_path)
                 opts = match_include(rel_path, include_only)
                 if opts is None:
                     continue
 
+                mode = opts.get("mode", "full")
+                symbols_filter = opts.get("symbols")
+                line_numbers = opts.get("line_numbers")
+
+                # mode="symbols" with no further override: skip source block entirely
+                if (
+                    mode == "symbols"
+                    and symbols_filter is None
+                    and line_numbers is None
+                ):
+                    continue
+
+                print(rel_path)
                 changed = " ⚡ (modified)" if rel_path in git_changed else ""
                 ext = rel_path.rsplit(".", 1)[-1] if "." in rel_path else ""
-                out.write(f"### `{rel_path}`{changed}\n```{ext}\n")
+
+                annotation = ""
+                if symbols_filter is not None:
+                    annotation = f" (symbols: {', '.join(symbols_filter)})"
+                elif line_numbers is not None:
+                    annotation = f" (lines {line_numbers[0]}–{line_numbers[1]})"
+
+                out.write(f"### `{rel_path}`{changed}{annotation}\n```{ext}\n")
                 try:
-                    with open(rel_path, "r", encoding="utf-8") as f:
-                        source = f.read()
+                    if symbols_filter is not None and ext == "py":
+                        source = extract_symbol_source(rel_path, symbols_filter)
+                    elif line_numbers is not None:
+                        source = extract_line_range(
+                            rel_path, line_numbers[0], line_numbers[1]
+                        )
+                    else:
+                        with open(rel_path, "r", encoding="utf-8") as f:
+                            source = f.read()
+
                     if opts.get("strip_comments") and ext == "py":
                         source = strip_python_comments(source)
                     out.write(source)
@@ -394,7 +478,7 @@ def bundle():
                     out.write(f"// Error reading: {e}\n")
                 out.write("\n```\n\n")
 
-        # Footer / symtem prompt
+        # Footer / system prompt
         out.write("# System Prompt\n")
         out.write(
             "You are a code writer/analyst/review assistant who is proficient in Python and front-end development stack, e.g., HTML, Javascript, React. Your task is to analyze the provided code and respond to the user's instructions/questions/goals.\n\n"
@@ -427,6 +511,11 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "init":
         init()
     else:
+        config_path = Path(".code-context/config.toml")
+
+        if not config_path.exists():
+            print("⚠ No .code-context/config.toml found. Automatically initializing...")
+            init()
         bundle()
 
 
