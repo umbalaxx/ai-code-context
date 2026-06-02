@@ -262,6 +262,9 @@ def collect_files(include_only):
         List of relative file paths to include
     """
 
+    if len(include_only) == 0:
+        return []
+
     collected = []
     for root, _, files in os.walk("."):
 
@@ -269,13 +272,31 @@ def collect_files(include_only):
             abs_path = os.path.join(root, file)
             rel_path = os.path.relpath(abs_path, ".")
 
-            if include_only and match_include(rel_path, include_only) is None:
+            if match_include(rel_path, include_only) is None:
                 continue
             if is_binary(abs_path):
                 continue
 
             collected.append(rel_path)
     return sorted(collected)
+
+
+def add_to_gitignore():
+    """Add code-context to gitignore"""
+
+    gitignore_path = Path(".gitignore")
+    entry = "\n# code-context\n.code-context/\n"
+
+    if gitignore_path.exists():
+        content = gitignore_path.read_text(encoding="utf-8")
+        if ".code-context" not in content:
+            gitignore_path.write_text(content + entry, encoding="utf-8")
+            print("✓ Added .code-context/ to .gitignore")
+        else:
+            print("✓ .code-context/ already in .gitignore")
+    else:
+        gitignore_path.write_text(entry.lstrip(), encoding="utf-8")
+        print("✓ Created .gitignore with .code-context/")
 
 
 def init():
@@ -288,6 +309,8 @@ def init():
 
     config_dir.mkdir(exist_ok=True)
     config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+
+    add_to_gitignore()
     print(f"✓ Created {config_path}")
 
 
@@ -300,7 +323,12 @@ def bundle():
     git_status = get_git_status()
     git_changed = get_git_changed_files()
 
-    with open(output_file, "w", encoding="utf-8") as out:
+    config_dir = Path(".code-context")
+    output_path = config_dir / output_file
+
+    config_dir.mkdir(exist_ok=True)
+
+    with open(output_path, "w", encoding="utf-8") as out:
 
         # Header
         out.write("# Code Context\n")
@@ -390,6 +418,8 @@ def bundle():
         print(f"  Selective: {[p for p, _ in include_only]}")
     if git_changed:
         print(f"  ⚡ {len(git_changed)} files changed since last commit")
+
+    add_to_gitignore()
 
 
 def main():

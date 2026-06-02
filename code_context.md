@@ -1,14 +1,14 @@
 # Code Context
-Generated: 2026-06-01 22:06
+Generated: 2026-06-02 08:52
 
 ## Project Structure
 ```
     .gitignore
     .python-version
     README.md
-    code_context.md [M]
-    pyproject.toml [M]
-    uv.lock [M]
+    code_context.md
+    pyproject.toml
+    uv.lock
     src/
         ai_code_context/
             __init__.py
@@ -18,18 +18,18 @@ Generated: 2026-06-01 22:06
 ## Symbol Index
 
 **src/ai_code_context/cx_script.py** ⚡
-  def load_config() [line 76] — Returns (include_only, output_file).
-  def is_binary() [line 122]
-  def get_git_status() [line 131] — Returns dict of {filepath: status} for changed files.
-  def get_git_changed_files() [line 147] — Returns list of files changed since last commit.
-  def match_include() [line 158] — Returns the opts dict for the first include entry that matches rel_path,
-  def extract_python_symbols() [line 182] — Extract top-level classes, functions, and their docstrings.
-  def extract_imports() [line 212] — Extract what this file imports.
-  def strip_python_comments() [line 232] — Remove # comments from Python source.
-  def collect_files() [line 272] — Collect all files that should be included in the code context.
-  def init() [line 299]
-  def bundle() [line 315]
-  def main() [line 413]
+  def load_config() [line 58] — Returns (include_only, output_file).
+  def is_binary() [line 104]
+  def get_git_status() [line 113] — Returns dict of {filepath: status} for changed files.
+  def get_git_changed_files() [line 129] — Returns list of files changed since last commit.
+  def match_include() [line 140] — Returns the opts dict for the first include entry that matches rel_path,
+  def extract_python_symbols() [line 164] — Extract top-level classes, functions, and their docstrings.
+  def extract_imports() [line 194] — Extract what this file imports.
+  def strip_python_comments() [line 214] — Remove # comments from Python source.
+  def collect_files() [line 254] — Collect all files that should be included in the code context.
+  def init() [line 286]
+  def bundle() [line 302]
+  def main() [line 400]
 
 ## Import Map
 
@@ -82,7 +82,7 @@ You can modify the following settings:
 
 ```
 
-### `pyproject.toml` ⚡ (modified)
+### `pyproject.toml`
 ```toml
 [project]
 name = "ai-code-context"
@@ -138,24 +138,6 @@ IGNORED_DIRS = {
     ".code-context",
 }
 
-# IGNORED_SUFFIXES = {
-#     ".env",
-#     ".txt",
-#     ".log",
-#     ".json",
-#     ".csv",
-#     ".ipynb",
-#     ".xml",
-#     ".yaml",
-#     ".yml",
-#     ".pdf",
-#     ".sh",
-#     ".toml",
-#     ".html",
-#     ".zip",
-#     ".archive",
-#     ".bib",
-# }
 
 # Edit these directly when you want to be selective
 # e.g. [("src/auth", {}), ("src/models/user.py", {"strip_comments": True})]
@@ -390,14 +372,19 @@ def collect_files(include_only):
         List of relative file paths to include
     """
 
+    if len(include_only) == 0:
+        return []
+
     collected = []
-    for root, _, files in os.walk("."):
+    for root, dirs, files in os.walk("."):
+
+        dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
 
         for file in files:
             abs_path = os.path.join(root, file)
             rel_path = os.path.relpath(abs_path, ".")
 
-            if include_only and match_include(rel_path, include_only) is None:
+            if match_include(rel_path, include_only) is None:
                 continue
             if is_binary(abs_path):
                 continue
