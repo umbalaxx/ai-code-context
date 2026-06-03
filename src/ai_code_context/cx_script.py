@@ -37,17 +37,17 @@ AI_INSTRUCTION_FILES = ["CLAUDE.md", "AGENTS.md"]
 
 CONTEXT_SENTINEL = ".code-context/code_context.md"
 
-CONTEXT_INSTRUCTION = (
-    "\n## Project Context (ai-code-context)\n\n"
-    "Before starting any task, read `.code-context/code_context.md` for the full project context.\n"
-    "Do not crawl individual source files unless asked.\n\n"
-    "If the context file is missing, run `code-context` to generate it.\n\n"
-    "### Refresh Context\n"
-    "If you've made changes and need updated context, run:\n"
-    "```bash\n"
-    "code-context\n"
-    "```\n"
-)
+# CONTEXT_INSTRUCTION = (
+#     "\n## Project Context (ai-code-context)\n\n"
+#     "Before starting any task, read `.code-context/code_context.md` for the full project context.\n"
+#     "Do not crawl individual source files unless asked.\n\n"
+#     "If the context file is missing, run `code-context` to generate it.\n\n"
+#     "### Refresh Context\n"
+#     "If you've made changes and need updated context, run:\n"
+#     "```bash\n"
+#     "code-context\n"
+#     "```\n"
+# )
 
 
 DEFAULT_CONFIG = """\
@@ -356,20 +356,20 @@ def add_to_gitignore():
         print("✓ Created .gitignore with .code-context/")
 
 
-def add_ai_instructions():
-    """Inject code-context instructions into AI context files (CLAUDE.md, AGENTS.md, etc.)"""
-    for filename in AI_INSTRUCTION_FILES:
-        path = Path(filename)
-        if path.exists():
-            content = path.read_text(encoding="utf-8")
-            if CONTEXT_SENTINEL in content:
-                print(f"✓ {filename} already has code-context instructions")
-            else:
-                path.write_text(content + CONTEXT_INSTRUCTION, encoding="utf-8")
-                print(f"✓ Added code-context instructions to {filename}")
-        else:
-            path.write_text(CONTEXT_INSTRUCTION.lstrip(), encoding="utf-8")
-            print(f"✓ Created {filename}")
+# def add_ai_instructions():
+#     """Inject code-context instructions into AI context files (CLAUDE.md, AGENTS.md, etc.)"""
+#     for filename in AI_INSTRUCTION_FILES:
+#         path = Path(filename)
+#         if path.exists():
+#             content = path.read_text(encoding="utf-8")
+#             if CONTEXT_SENTINEL in content:
+#                 print(f"✓ {filename} already has code-context instructions")
+#             else:
+#                 path.write_text(content + CONTEXT_INSTRUCTION, encoding="utf-8")
+#                 print(f"✓ Added code-context instructions to {filename}")
+#         else:
+#             path.write_text(CONTEXT_INSTRUCTION.lstrip(), encoding="utf-8")
+#             print(f"✓ Created {filename}")
 
 
 def init():
@@ -384,7 +384,7 @@ def init():
     config_path.write_text(DEFAULT_CONFIG, encoding="utf-8")
 
     add_to_gitignore()
-    add_ai_instructions()
+    # add_ai_instructions()
     print(f"✓ Created {config_path}")
 
 
